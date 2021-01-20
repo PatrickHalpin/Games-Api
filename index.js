@@ -4,16 +4,40 @@ var promise = require("promise");
 const request = require('request');
 const cors = require('cors');
 
-var today = new Date();
-var dd = String(today.getDate()).padStart(2, '0');
-var mm = String(today.getMonth() + 1).padStart(2, '0'); //January is 0!
-var lm = String(today.getMonth()).padStart(2, '0'); //get previous month
-var yyyy = today.getFullYear();
+var today;
+var fromDate;
+var dd;
+var mm;
+var lm;
+var yyyy;
+var ly;
 
-today = dd + '.' + mm + '.' + yyyy;
-fromDate =  dd + '.' + lm + '.' + yyyy;
+function initDate()
+{
+  today = new Date();
+  dd = String(today.getDate()).padStart(2, '0');
+  mm = String(today.getMonth() + 1).padStart(2, '0'); //January is 0!
+  lm = String(today.getMonth()).padStart(2, '0')//get previous month
+  yyyy = today.getFullYear();
+
+  if(mm==01)
+  {
+    ld=01;
+    lm=01;
+    ly=yyyy-1;
+  }
+  else
+  {
+      ld=dd;
+  }
+
+  today = dd + '.' + mm + '.' + yyyy;
+  fromDate =  ld + '.' + lm + '.' + yyyy;
+}
 
 ///// hold data
+var callNumber = 0;
+var lastGameDateGames = null;
 var gameWeekGames = null;
 var currentGames = null
 var todaysGames = null;
@@ -21,10 +45,30 @@ var lastMonthsGames = null;
 var displayGames = null;
 var lastGameDate = null;
 var gw = 1;
+var table= null;
 
 ///////////////////////////////////////
 //Games methods
 ///////////////////////////////////////
+
+function loadTable()
+{
+  console.log('Getting Table');
+  return new Promise(function(resolve, reject)
+  {
+    request('http://api.football-api.com/2.0/standings/1204?Authorization=565ec012251f932ea400000113e3196b0a6f4dbe6071ed4fd60e926e',function (error, response, body)
+    {
+      if (!error && response.statusCode == 200)
+      {
+        resolve(body);
+      }
+      else
+      {
+        resolve(null);
+      }
+    });
+  });
+}
 
 function loadGameWeekGames()
 {
@@ -68,12 +112,10 @@ function getGamesForDate(date)
     {
       if (!error && response.statusCode == 200)
       {
-        console.log('Retruning Games for ' + date);
         resolve(body);
       }
       else
       {
-        console.log('No games for ' + date)
         resolve(null);
       }
     });
@@ -119,10 +161,10 @@ function loadDisplayGames()
     }
     else
     {
-        var promD = getGamesForDate(getDate);
+        var promD = getGamesForDate(lastGameDate);
         promD.then(function(result)
         {
-          console.log("Display Games: Games on " + getDate);
+          console.log("Display Games: Games on " + lastGameDate);
           resolve(result);
         },
         function(err)
@@ -154,7 +196,7 @@ app.get("/getLastMonthsGames", cors(), (req, res, next) => {
 
 //Gets the current league table
 app.get("/getTable", cors(), (req, res, next) => {
-    res.send(null);
+    res.send(table);
 });
 
 //Gets games from the current round
@@ -172,19 +214,44 @@ app.get("/getLastGameDate", cors(), (req, res, next) => {
     res.send(lastGameDate);
 });
 
+//Gets games from the last full day of games
+app.get("/getGamesForLastDate", cors(), (req, res, next) => {
+    res.send(lastGameDateGames);
+});
+
 /////
 
 /////
+
+function getCurrentGames()
+{
+  return new Promise(function(resolve, reject)
+  {
+    request('http://api.football-api.com/2.0/matches?comp_id=1204&Authorization=565ec012251f932ea400000113e3196b0a6f4dbe6071ed4fd60e926e',function (error, response, body)
+    {
+      if (!error && response.statusCode == 200)
+      {
+        resolve(body);
+      }
+      else
+      {
+        reject(null);
+      }
+    });
+  });
+}
 
 function loadKeyData()
 {
   return new Promise(function(resolve, reject)
   {
+    //get games to be played or have been played today saved in global variable
     var prom2 = getGamesForDate(today);
 
     prom2.then(function(result) {
         todaysGames = result;
 
+        //then get games that have been played over the last month saved in a global variable
         var prom3 = loadGamesForLastMonth();
 
         prom3.then(function(result2) {
@@ -216,7 +283,7 @@ function setGameWeek()
   else
   {
     var week;
-    for(var g = games.length -1; g>=0;g--)
+    for(var g = 0; g<=games.length;g++)
     {
       if(games[g].status=='FT')
       {
@@ -270,19 +337,20 @@ function init()
 
   prom.then(function(result) {
 
+          //Sets global var for Gameweek (not needed?) and last game date
           var promSetDateDetails = setDateDetails();
           promSetDateDetails.then(function(dateDetailsResults) {
 
-            var promGwGames = loadGameWeekGames();
-            promGwGames.then(function(gwGamesResult) {
+            //Once gotten then use game date to get games from last game date
+            var promLastGameDateGames = getGamesForDate(lastGameDate);
+            promLastGameDateGames.then(function(lastGameDateGamesResult){
+            lastGameDateGames=lastGameDateGamesResult
 
-            gameWeekGames=gwGamesResult;
-
-          }, function(gwGamesErr) {
-                    console.log(gwGamesErr);
+          }, function(gameDateErr) {
+                    console.log(gameDateErr);
                 });
 
-
+            //Then use to go and set up the games to be displayed on home
             var promDis = loadDisplayGames();
             promDis.then(function(result2) {
             displayGames=result2;
@@ -294,6 +362,24 @@ function init()
             console.log(err);
         });
 
+        var promTable = loadTable();
+
+        promTable.then(function(resultTable) {
+            table = resultTable;
+          }, function(tableErr) {
+                console.log('Error: ' + tableErr);
+                table = null;
+            });
+
+            var gamePromise = getCurrentGames();
+            gamePromise.then(function(currResult) {
+                currentGames = currResult;
+                console.log(currResult);
+              }, function(gameErr) {
+                    console.log('Error (No current games): ' + gameErr);
+                    currentGames = null;
+                });
+
           }, function(dateDetailsErr) {
                   console.log(dateDetailsErr);
               });
@@ -301,11 +387,18 @@ function init()
 
 /////
 app.listen(8080, () => {
- console.log("Server running on port 8080");
+initDate();
+ console.log("Server running on :8080");
  console.log(today);
  init();
- //recall every min??
- //use ajax to refresh page??
- //get table??
+
+ //recall every min to get up to date data
+ setInterval(function() {
+     callNumber+=1;
+     console.log(callNumber);
+     initDate();
+     init();
+ }, 60 * 1000);
+
 
 });
